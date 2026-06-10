@@ -1,0 +1,112 @@
+service: vision-moderation
+window: 30d  # all objectives are evaluated over a rolling 30-day window
+
+slos:
+  # Tied to the partner SLA: 99.5% availability, refund trigger.
+  # Internal objective (99.7%) is stricter than the external SLA (99.5%),
+  # giving the team a 21.6-minute/month error budget cushion before partners
+  # are ever impacted.
+  - name: availability
+    description: >
+      Proportion of synchronous requests that receive a non-5xx, non-timeout
+      response within 10 s. Measured at the load balancer ingress.
+      Counts as "good": HTTP 2xx, 3xx, 4xx (client errors are not service failures).
+      Counts as "bad": HTTP 5xx, connection timeouts, upstream TCP resets.
+    sli:
+      type: request_based
+      good_requests: http_requests_total{status=~"[234][0-9][0-9]", endpoint="/v1/moderate"}
+      total_requests: http_requests_total{endpoint="/v1/moderate"}
+    objective: 0.997          # 99.7% — stricter than the 99.5% partner SLA
+    rolling_window: 30d
+    error_budget_minutes: 129.6   # 30d × 24h × 60m × (1 - 0.997)
+    partner_sla_note: >
+      External SLA promises 99.5% availability. This internal SLO at 99.7%
+      ensures we detect and react to reliability issues ~2.6× sooner than
+      the point at which partner refunds are triggered.
+    burn_rate_alerts:
+      - severity: page         # fast burn: 2% of monthly budget gone in 1 h
+        burn_rate: 14.4        # 14.4× normal rate → exhausts budget in ~2.1 h
+        window: 1h
+        condition: >
+          error_rate_1h > (1 - 0.997) * 14.4
+      - severity: ticket       # slow burn: 10% of budget gone in 6 h
+        burn_rate: 6
+        window: 6h
+        condition: >
+          error_rate_6h > (1 - 0.997) * 6
+      - severity: ticket       # multi-window guard: catches sustained low bleed
+        burn_rate: 3
+        window: 3d
+        condition: >
+          error_rate_3d > (1 - 0.997) * 3
+
+  # Synchronous endpoint latency SLO.
+  # Objective: 95% of requests complete in ≤ 250 ms end-to-end (load balancer
+  # receives first byte of response within 250 ms of last byte of request).
+  - name: latency_p95
+    description: >
+      Proportion of synchronous /v1/moderate requests with end-to-end latency
+      (measured from request receipt at the load balancer to response send)
+      at or below 250 ms. Excludes batch endpoint traffic.
+    sli:
+      type: request_based
+      good_requests: http_request_duration_ms_bucket{endpoint="/v1/moderate", le="250"}
+      total_requests: http_requests_total{endpoint="/v1/moderate"}
+    objective: 0.95
+    rolling_window: 30d
+    error_budget_minutes: 2160   # 30d × 24h × 60m × (1 - 0.95) = 2160 min
+    partner_sla_note: >
+      Partner SLA triggers refunds if p95 latency exceeds 500 ms over a rolling
+      hour. This internal SLO targets 250 ms p95, giving a 2× buffer before
+      refund exposure. Additionally, the SLO is evaluated over 30 days whereas
+      the SLA fires on a 1-hour window — the burn-rate alerts below bridge that gap.
+    burn_rate_alerts:
+      - severity: page         # p95 budget burning 14.4× fast — fix now
+        burn_rate: 14.4
+        window: 1h
+        condition: >
+          latency_error_rate_1h > (1 - 0.95) * 14.4
+      - severity: ticket
+        burn_rate: 6
+        window: 6h
+        condition: >
+          latency_error_rate_6h > (1 - 0.95) * 6
+      - severity: ticket
+        burn_rate: 3
+        window: 3d
+        condition: >
+          latency_error_rate_3d > (1 - 0.95) * 3
+
+  # Tail latency SLO.
+  # Objective: 99% of requests complete in ≤ 400 ms. Detects outlier spikes
+  # (e.g., cold model paths, Redis misses, GC pauses) that do not surface in p95.
+  - name: latency_p99
+    description: >
+      Proportion of synchronous /v1/moderate requests with end-to-end latency
+      at or below 400 ms, measured at the load balancer.
+      This is a tail-latency guard: it catches pathological outliers that pass
+      the p95 check but signal underlying instability (e.g., GPU memory pressure,
+      Redis connection pool exhaustion, GC stop-the-world pauses).
+    sli:
+      type: request_based
+      good_requests: http_request_duration_ms_bucket{endpoint="/v1/moderate", le="400"}
+      total_requests: http_requests_total{endpoint="/v1/moderate"}
+    objective: 0.99
+    rolling_window: 30d
+    error_budget_minutes: 432   # 30d × 24h × 60m × (1 - 0.99) = 432 min
+    burn_rate_alerts:
+      - severity: page         # tail latency burning fast — likely hardware or model issue
+        burn_rate: 14.4
+        window: 1h
+        condition: >
+          latency_p99_error_rate_1h > (1 - 0.99) * 14.4
+      - severity: ticket
+        burn_rate: 6
+        window: 6h
+        condition: >
+          latency_p99_error_rate_6h > (1 - 0.99) * 6
+      - severity: ticket
+        burn_rate: 3
+        window: 3d
+        condition: >
+          latency_p99_error_rate_3d > (1 - 0.99) * 3
