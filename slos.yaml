@@ -1,0 +1,37 @@
+service: vision-moderation
+slos:
+  - name: availability
+    sli: proportion of requests returning HTTP 2xx status codes out of all requests over a 30-day rolling window
+    objective: 0.997
+    window: 30d
+    burn_rate_alerts:
+      - severity: page
+        burn_rate: 14.4
+        window: 1h
+      - severity: ticket
+        burn_rate: 6
+        window: 6h
+
+  - name: latency_p95
+    sli: proportion of requests with end-to-end latency under 250 ms out of all requests
+    objective: 0.95
+    window: 30d
+    burn_rate_alerts:
+      - severity: page
+        burn_rate: 14.4
+        window: 1h
+      - severity: ticket
+        burn_rate: 6
+        window: 6h
+
+  - name: latency_p99
+    sli: proportion of requests with end-to-end latency under 500 ms out of all requests
+    objective: 0.99
+    window: 30d
+    burn_rate_alerts:
+      - severity: page
+        burn_rate: 14.4
+        window: 1h
+      - severity: ticket
+        burn_rate: 6
+        window: 6h
